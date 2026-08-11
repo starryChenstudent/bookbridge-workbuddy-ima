@@ -1,0 +1,15 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+
+# Local or private credentials must never be committed.
+.env
+config/
+api_key
+*.key
+*.pem
+
+# Local library data and temporary work products.
+library/
+.work/
+*.part
