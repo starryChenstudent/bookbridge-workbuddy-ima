@@ -2,7 +2,7 @@
 
 > 面向 WorkBuddy 的本地读书工作流：搜索用户有权获取的电子书，将原始文件安全保存到本机，并自动导入 IMA 知识库。
 
-[![Version](https://img.shields.io/badge/version-v1-blue.svg)](https://github.com/starryChenstudent/-_workbuddy-imaknowledgebase/tree/v1)
+[![Version](https://img.shields.io/badge/version-v1-blue.svg)](https://github.com/starryChenstudent/bookbridge-workbuddy-ima/tree/v1)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![WorkBuddy Skill](https://img.shields.io/badge/WorkBuddy-Skill-7c3aed.svg)](SKILL.md)
 
@@ -55,13 +55,13 @@ flowchart LR
 
 ### 方式一：下载版本包
 
-下载 [`v1` Skill 专用包](https://github.com/starryChenstudent/-_workbuddy-imaknowledgebase/archive/refs/tags/v1.zip)。该标签快照只包含 Skill 本体，不包含仓库的 README、LICENSE 或 Git 配置文件；解压后将包含 `SKILL.md` 的目录导入 WorkBuddy。
+下载 [`v1` Skill 专用包](https://github.com/starryChenstudent/bookbridge-workbuddy-ima/archive/refs/tags/v1.zip)。该标签快照只包含 Skill 本体，不包含仓库的 README、LICENSE 或 Git 配置文件；解压后将包含 `SKILL.md` 的目录导入 WorkBuddy。
 
 ### 方式二：克隆仓库
 
 ```bash
-git clone https://github.com/starryChenstudent/-_workbuddy-imaknowledgebase.git
-cd ./-_workbuddy-imaknowledgebase
+git clone https://github.com/starryChenstudent/bookbridge-workbuddy-ima.git
+cd ./bookbridge-workbuddy-ima
 ```
 
 然后在 WorkBuddy 中将该目录添加为 Skill。
