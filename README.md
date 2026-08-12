@@ -1,142 +1,164 @@
-# 本地智能读书助手
+# BookBridge
 
-> 面向 WorkBuddy 的本地读书工作流：搜索用户有权获取的电子书，将原始文件安全保存到本机，并自动导入 IMA 知识库。
+> A local reading workflow for WorkBuddy: find books the user is authorized to access, save the original files locally, and import them into an IMA knowledge base.
 
-[![Version](https://img.shields.io/badge/version-v1-blue.svg)](https://github.com/starryChenstudent/bookbridge-workbuddy-ima/tree/v1)
+[English](README.md) | [简体中文](README.zh-CN.md)
+
+[![Version](https://img.shields.io/badge/version-BookBridge--v1-blue.svg)](https://github.com/starryChenstudent/bookbridge-workbuddy-ima/tree/BookBridge-v1)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![WorkBuddy Skill](https://img.shields.io/badge/WorkBuddy-Skill-7c3aed.svg)](SKILL.md)
 
-## 项目简介
+## Overview
 
-本项目是一套用于 WorkBuddy 的 Skill。用户提出书籍请求后，它会依次完成版本搜索、格式筛选、授权下载、本地校验、IMA 查重、上传入库和可检索验证。
+BookBridge is a WorkBuddy Skill that handles edition discovery, format selection, authorized downloading, local integrity checks, IMA duplicate detection, upload, ingestion, and retrieval verification.
 
-下载的原始书籍默认保存在当前用户的：
+Original downloaded books are stored by default in:
 
 ```text
 Desktop/library/books/
 ```
 
-本项目只应用于公版、开放许可，或用户已经获得合法访问与下载授权的内容。请遵守所在地法律、内容许可条款及相关服务的使用规则。
+Use this project only for public-domain or openly licensed works, or content that you are legally authorized to access and download. Follow applicable laws, content licenses, and service terms.
 
-## 核心能力
+## Features
 
-- 按书名、作者、ISBN、DOI 或 MD5 搜索书籍。
-- 优先选择 PDF，其次 EPUB，再考虑 IMA 可接收或可转换的格式。
-- 下载过程中支持断点续传，并校验 HTTPS、文件签名、大小和 MD5。
-- 将原始文件保存在本机，不静默覆盖已有书籍。
-- 通过 WorkBuddy 已连接的 `ima-mcp` 上传到指定 IMA 知识库。
-- 上传前遍历知识库检查同名文件，避免误重复。
-- 区分“已入库”“解析中”和“已可检索”，避免过早报告完成。
-- 母版不包含 Anna's Archive Key、IMA 凭证或 COS 临时凭证。
+- Search by title, author, ISBN, DOI, or MD5.
+- Prefer PDF, then EPUB, then formats accepted by or convertible for IMA.
+- Resume interrupted downloads and validate HTTPS, file signatures, size, and MD5.
+- Preserve original files locally without silently overwriting existing books.
+- Upload through WorkBuddy's connected `ima-mcp` connector.
+- Check for exact-name duplicates before uploading.
+- Distinguish between added, parsing, and searchable states.
+- Keep Anna's Archive keys, IMA credentials, and temporary COS credentials out of the public package.
 
-## 工作流程
+## Workflow
 
 ```mermaid
 flowchart LR
-    A[用户提出书籍请求] --> B[搜索并选择版本]
-    B --> C[授权下载与文件校验]
-    C --> D[保存到本地书库]
-    D --> E[IMA 格式预检与查重]
-    E --> F[上传并添加到知识库]
-    F --> G[等待解析并验证检索]
+    A[Book request] --> B[Find and select an edition]
+    B --> C[Authorized download and validation]
+    C --> D[Save to local library]
+    D --> E[IMA preflight and duplicate check]
+    E --> F[Upload and add to knowledge base]
+    F --> G[Wait for parsing and verify search]
 ```
 
-## 运行要求
+## Requirements
 
-- WorkBuddy，并已连接可用的 `ima-mcp` 连接器。
-- Python 3.10 或更高版本；核心 Python 脚本只使用标准库。
-- Node.js 18 或更高版本，用于把文件流式上传到腾讯云 COS。
-- Anna's Archive 会员 Fast Download API Key，由用户在本机隐藏配置。
-- 可选：Calibre 的 `ebook-convert`。仅在 MOBI、AZW、AZW3、FB2、RTF 或 DJVU 需要转换为 EPUB 时使用。
+- WorkBuddy with a working `ima-mcp` connector.
+- Python 3.10 or later. The core Python scripts use only the standard library.
+- Node.js 18 or later for streaming files to Tencent Cloud COS.
+- An active Anna's Archive membership and its member secret key for the Fast Download API.
+- Optional: Calibre's `ebook-convert`, only when MOBI, AZW, AZW3, FB2, RTF, or DJVU must be converted to EPUB.
 
-项目不会自动安装 Python、Node.js、Calibre 或其他软件。
+The project does not install Python, Node.js, Calibre, or other software automatically.
 
-## 安装
+## Install
 
-### 方式一：下载版本包
+### Option 1: download the Skill-only package
 
-下载 [`v1` Skill 专用包](https://github.com/starryChenstudent/bookbridge-workbuddy-ima/archive/refs/tags/v1.zip)。该标签快照只包含 Skill 本体，不包含仓库的 README、LICENSE 或 Git 配置文件；解压后将包含 `SKILL.md` 的目录导入 WorkBuddy。
+Download [`BookBridge-v1`](https://github.com/starryChenstudent/bookbridge-workbuddy-ima/archive/refs/tags/BookBridge-v1.zip). This tag snapshot contains only the Skill itself—no README, license, or Git configuration. Extract it and import the directory containing `SKILL.md` into WorkBuddy.
 
-### 方式二：克隆仓库
+### Option 2: clone the repository
 
 ```bash
 git clone https://github.com/starryChenstudent/bookbridge-workbuddy-ima.git
 cd ./bookbridge-workbuddy-ima
 ```
 
-然后在 WorkBuddy 中将该目录添加为 Skill。
+Then add the directory as a Skill in WorkBuddy.
 
-## 首次配置
+## Anna's Archive API access and key setup
 
-进入 Skill 根目录后，先检查运行环境：
+BookBridge does not grant Anna's Archive API access. The stable Fast Download JSON API is a member feature, so complete these steps first:
+
+1. Open the [Anna's Archive account page](https://annas-archive.gl/account) and register or sign in.
+2. Obtain an active membership through Anna's Archive's official process. Review its current terms and availability before proceeding.
+3. Save the account **secret key** supplied by Anna's Archive. This member secret key is used as the Fast Download API key. Do not post it in chat, an issue, or a commit.
+
+Anna's Archive documents the member API in its [API FAQ](https://annas-archive.gl/faq#api). Membership, quota, and access rules are controlled by Anna's Archive and may change.
+
+After installing the Skill, open a terminal in the Skill root and check the runtime and key status:
 
 ```bash
 python3 scripts/python_runner.py runtime_check.py
 python3 scripts/python_runner.py configure_key.py --check
 ```
 
-如果返回 `configured: false`，在本机终端运行：
+If the result contains `configured: false`, run:
 
 ```bash
 python3 scripts/python_runner.py configure_key.py
 ```
 
-程序会使用隐藏输入读取 Key，并将其保存在当前用户的 `~/.config/annas-archive/api_key`。不要把 Key 发到聊天、提交到 Git，或写入公开的 Skill 包。
-
-之后，在 WorkBuddy 连接器管理页面连接 `ima-mcp`。IMA 授权由 WorkBuddy 托管，本项目不会读取本地 IMA Client ID 或 API Key。
-
-## 使用示例
-
-安装并连接 `ima-mcp` 后，可以直接在 WorkBuddy 中提出请求：
+Paste the Anna's Archive member secret key only into the hidden terminal prompt, then enter it again for confirmation. The script stores it outside the Skill directory at:
 
 ```text
-帮我查找并下载《书名》，然后添加到我的 IMA 知识库。
+~/.config/annas-archive/api_key
+```
+
+Verify the setup without displaying the key:
+
+```bash
+python3 scripts/python_runner.py configure_key.py --check
+```
+
+A successful result reports `configured: true`. Never add the key to `SKILL.md`, `.env`, Git, a public ZIP, or a chat message.
+
+Finally, connect `ima-mcp` from WorkBuddy's connector management page. IMA authorization is managed by WorkBuddy; BookBridge does not read a local IMA Client ID or API key.
+
+## Usage examples
+
+After installation and `ima-mcp` connection, ask WorkBuddy directly:
+
+```text
+Find and download <Book Title>, then add it to my IMA knowledge base.
 ```
 
 ```text
-找 ISBN 978xxxxxxxxxx 对应的中文版本，只下载到本地，不上传 IMA。
+Find the Chinese edition for ISBN 978xxxxxxxxxx. Download it locally only; do not upload it to IMA.
 ```
 
 ```text
-把我有权下载的这本 EPUB 导入默认 IMA 知识库，并确认它已经可以检索。
+Import this authorized EPUB into my default IMA knowledge base and confirm that it is searchable.
 ```
 
-默认行为是完成“搜索 → 下载 → IMA 入库 → 可检索验证”。只有明确说“只下载、不上传”时，流程才会停在本地文件。
+The default workflow completes search, download, IMA ingestion, and retrieval verification. It stops after local download only when the user explicitly asks not to upload.
 
-## 项目结构
+## Project structure
 
 ```text
 .
-├── SKILL.md                         # Skill 主流程与安全门禁
-├── agents/openai.yaml               # WorkBuddy/Agent 展示信息
+├── SKILL.md                         # Main workflow and safety gates
+├── agents/openai.yaml               # WorkBuddy/Agent metadata
 ├── references/
-│   ├── api.md                       # Fast Download API 说明
-│   └── ima-mcp.md                   # IMA MCP 调用约定
+│   ├── api.md                       # Fast Download API reference
+│   └── ima-mcp.md                   # IMA MCP request conventions
 └── scripts/
-    ├── annas_archive_client.py      # 搜索、授权下载与完整性校验
-    ├── configure_key.py             # 本地隐藏配置下载凭证
-    ├── cos-upload.cjs               # COS 文件流上传
-    ├── format_for_ima.py            # 格式准备、预检与目标配置
-    ├── library_paths.py             # 本地书库路径解析
-    ├── package_skill.py             # 母版/私版打包
-    ├── python_runner.py             # Python 运行入口
-    └── runtime_check.py             # 运行环境检查
+    ├── annas_archive_client.py      # Search, download, and integrity checks
+    ├── configure_key.py             # Hidden local credential setup
+    ├── cos-upload.cjs               # Streaming COS upload
+    ├── format_for_ima.py            # Format preparation and preflight
+    ├── library_paths.py             # Local library path handling
+    ├── package_skill.py             # Public/private packaging
+    ├── python_runner.py             # Python runtime entry point
+    └── runtime_check.py             # Runtime checks
 ```
 
-## 安全与隐私
+## Security and privacy
 
-- 公共源码和母版不得包含 Anna's Archive Key。
-- 不记录或展示临时下载 URL、COS 凭证、Token、知识库 ID、Media ID 或文件哈希。
-- 网络下载只接受 HTTPS，不使用代理、Torrent 或绕过访问控制的方式。
-- COS 上传失败时不会继续执行 IMA 入库。
-- 打包或重新安装不会删除 `Desktop/library/` 中的书籍及用户配置。
+- Public source and public packages never contain an Anna's Archive key.
+- Temporary download URLs, COS credentials, tokens, knowledge-base IDs, media IDs, and hashes are not shown to users.
+- Downloads require HTTPS and do not use proxies, torrents, or access-control bypasses.
+- A failed COS upload never proceeds to IMA ingestion.
+- Packaging or reinstalling does not delete books or user configuration under `Desktop/library/`.
 
-更完整的执行规则请阅读 [SKILL.md](SKILL.md)。
+See [SKILL.md](SKILL.md) for the complete execution rules.
 
-## 版本
+## Version
 
-当前首个公开版本为 **v1**。
+The first public version is **BookBridge-v1**.
 
-## 许可证
+## License
 
-本项目采用 [MIT License](LICENSE)。第三方内容、服务和下载文件仍受其各自许可条款约束。
+This project uses the [MIT License](LICENSE). Third-party content, services, and downloaded files remain subject to their respective terms and licenses.
