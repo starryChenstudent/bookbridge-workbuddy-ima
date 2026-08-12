@@ -4,7 +4,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-[![Version](https://img.shields.io/badge/version-BookBridge--v1-blue.svg)](https://github.com/starryChenstudent/bookbridge-workbuddy-ima/tree/BookBridge-v1)
+[![Version](https://img.shields.io/badge/version-BookBridge--v1-blue.svg)](https://github.com/starryChenstudent/bookbridge-workbuddy-ima/releases/tag/BookBridge-v1)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![WorkBuddy Skill](https://img.shields.io/badge/WorkBuddy-Skill-7c3aed.svg)](SKILL.md)
 
@@ -55,9 +55,9 @@ flowchart LR
 
 ## 安装
 
-### 方式一：下载 Skill 专用包
+### 方式一：下载正式 Release
 
-下载 [`BookBridge-v1`](https://github.com/starryChenstudent/bookbridge-workbuddy-ima/archive/refs/tags/BookBridge-v1.zip)。该标签快照只包含 Skill 本体，不包含仓库的 README、LICENSE 或 Git 配置文件；解压后将包含 `SKILL.md` 的目录导入 WorkBuddy。
+下载 [`BookBridge-v1.zip` Release 附件](https://github.com/starryChenstudent/bookbridge-workbuddy-ima/releases/download/BookBridge-v1/BookBridge-v1.zip)。该正式发布包只包含 Skill 本体，不包含仓库的 README、LICENSE 或 Git 配置文件；解压后将包含 `SKILL.md` 的 `bookbridge` 目录导入 WorkBuddy。
 
 ### 方式二：克隆仓库
 

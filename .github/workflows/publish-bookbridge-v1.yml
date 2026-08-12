@@ -1,0 +1,75 @@
+name: Publish BookBridge v1 Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/publish-bookbridge-v1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: BookBridge-v1
+      RELEASE_ASSET: BookBridge-v1.zip
+      RELEASE_NOTES: |
+        ## BookBridge v1
+
+        Official Skill-only package for WorkBuddy and IMA Knowledge Base integration.
+
+        **Download `BookBridge-v1.zip` below.** It contains only the 12 files required by the Skill. No README, license, Git configuration, Anna's Archive key, IMA credential, or local library data is included.
+
+        WorkBuddy 与 IMA 知识库集成的正式 Skill 专用包。
+
+        **请下载下方的 `BookBridge-v1.zip`。** 包内仅有 Skill 所需的 12 个文件，不包含 README、许可证、Git 配置、Anna's Archive Key、IMA 凭证或本地书库数据。
+    steps:
+      - name: Check out the Skill-only tag
+        uses: actions/checkout@v4
+        with:
+          ref: BookBridge-v1
+          path: skill-source
+
+      - name: Build and verify the Skill-only package
+        shell: bash
+        run: |
+          python3 skill-source/scripts/python_runner.py package_skill.py --output "$RELEASE_ASSET"
+          python3 - <<'PY'
+          from pathlib import Path
+          import zipfile
+
+          archive_path = Path("BookBridge-v1.zip")
+          expected = {
+              "bookbridge/SKILL.md",
+              "bookbridge/agents/openai.yaml",
+              "bookbridge/references/api.md",
+              "bookbridge/references/ima-mcp.md",
+              "bookbridge/scripts/annas_archive_client.py",
+              "bookbridge/scripts/configure_key.py",
+              "bookbridge/scripts/cos-upload.cjs",
+              "bookbridge/scripts/format_for_ima.py",
+              "bookbridge/scripts/library_paths.py",
+              "bookbridge/scripts/package_skill.py",
+              "bookbridge/scripts/python_runner.py",
+              "bookbridge/scripts/runtime_check.py",
+          }
+          with zipfile.ZipFile(archive_path) as archive:
+              actual = {name for name in archive.namelist() if not name.endswith("/")}
+          if actual != expected:
+              raise SystemExit(f"Unexpected package contents: {sorted(actual ^ expected)}")
+          PY
+
+      - name: Create or update the GitHub Release
+        shell: bash
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$RELEASE_ASSET#BookBridge v1 Skill-only package" --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$RELEASE_TAG" --title "BookBridge v1" --notes "$RELEASE_NOTES" --latest --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$RELEASE_TAG" "$RELEASE_ASSET#BookBridge v1 Skill-only package" --verify-tag --title "BookBridge v1" --notes "$RELEASE_NOTES" --latest --repo "$GITHUB_REPOSITORY"
+          fi

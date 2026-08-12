@@ -4,7 +4,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-[![Version](https://img.shields.io/badge/version-BookBridge--v1-blue.svg)](https://github.com/starryChenstudent/bookbridge-workbuddy-ima/tree/BookBridge-v1)
+[![Version](https://img.shields.io/badge/version-BookBridge--v1-blue.svg)](https://github.com/starryChenstudent/bookbridge-workbuddy-ima/releases/tag/BookBridge-v1)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![WorkBuddy Skill](https://img.shields.io/badge/WorkBuddy-Skill-7c3aed.svg)](SKILL.md)
 
@@ -55,9 +55,9 @@ The project does not install Python, Node.js, Calibre, or other software automat
 
 ## Install
 
-### Option 1: download the Skill-only package
+### Option 1: download the official Release
 
-Download [`BookBridge-v1`](https://github.com/starryChenstudent/bookbridge-workbuddy-ima/archive/refs/tags/BookBridge-v1.zip). This tag snapshot contains only the Skill itself—no README, license, or Git configuration. Extract it and import the directory containing `SKILL.md` into WorkBuddy.
+Download the [`BookBridge-v1.zip` Release asset](https://github.com/starryChenstudent/bookbridge-workbuddy-ima/releases/download/BookBridge-v1/BookBridge-v1.zip). This official package contains only the Skill itself—no README, license, or Git configuration. Extract it and import the `bookbridge` directory containing `SKILL.md` into WorkBuddy.
 
 ### Option 2: clone the repository
 
