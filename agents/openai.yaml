@@ -1,0 +1,4 @@
+interface:
+  display_name: "本地智能读书助手"
+  short_description: "从Anna下载授权书籍并自动上传到IMA知识库"
+  default_prompt: "使用 $本地智能读书助手 下载我指定的授权书籍，优先选择PDF，其次EPUB，并自动上传到默认IMA知识库。"
