@@ -55,7 +55,7 @@ flowchart LR
 
 ### 方式一：下载版本包
 
-下载 [`v1` 源码包](https://github.com/starryChenstudent/-_workbuddy-imaknowledgebase/archive/refs/tags/v1.zip)，解压后将包含 `SKILL.md` 的目录导入 WorkBuddy。
+下载 [`v1` Skill 专用包](https://github.com/starryChenstudent/-_workbuddy-imaknowledgebase/archive/refs/tags/v1.zip)。该标签快照只包含 Skill 本体，不包含仓库的 README、LICENSE 或 Git 配置文件；解压后将包含 `SKILL.md` 的目录导入 WorkBuddy。
 
 ### 方式二：克隆仓库
 

@@ -14,12 +14,16 @@ import zipfile
 
 
 SKILL_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_OUTPUT = SKILL_ROOT.parents[2] / "本地智能读书助手-WorkBuddy.zip"
+DEFAULT_OUTPUT = SKILL_ROOT.parents[2] / "BookBridge-WorkBuddy.zip"
 KEYCHAIN_SERVICE = "workbuddy-annas-archive"
 ENV_NAME = "ANNAS_ARCHIVE_API_KEY"
+PACKAGE_ROOT_NAME = "bookbridge"
+SKILL_ENTRIES = {"SKILL.md", "agents", "references", "scripts"}
 
 
 def should_include(relative: Path) -> bool:
+    if not relative.parts or relative.parts[0] not in SKILL_ENTRIES:
+        return False
     if any(part in {".git", ".github"} for part in relative.parts):
         return False
     if relative.name == ".DS_Store":
@@ -102,7 +106,7 @@ def build_package(output: Path, private_secret: str | None = None) -> dict[str, 
     output.parent.mkdir(parents=True, exist_ok=True)
     files = package_files()
     packaged_env = private_env_payload(private_secret) if private_secret is not None else None
-    root_name = SKILL_ROOT.name
+    root_name = PACKAGE_ROOT_NAME
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for path in files:
             archive.write(path, Path(root_name) / path.relative_to(SKILL_ROOT))
