@@ -1,4 +1,4 @@
 interface:
-  display_name: "本地智能读书助手"
-  short_description: "从Anna下载授权书籍并自动上传到IMA知识库"
-  default_prompt: "使用 $本地智能读书助手 下载我指定的授权书籍，优先选择PDF，其次EPUB，并自动上传到默认IMA知识库。"
+  display_name: "BookBridge 本地智能读书助手"
+  short_description: "通过Anna记录或本地缓存下载授权书籍并导入IMA"
+  default_prompt: "使用 $bookbridge 处理我提供的 Anna 记录地址或 MD5，记住这条记录，并把我有权下载的文件导入默认 IMA 知识库。"

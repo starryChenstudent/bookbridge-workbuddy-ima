@@ -1,24 +1,27 @@
 #!/usr/bin/env python3
-"""Search Anna's Archive and download authorized ebooks without a proxy.
+"""Resolve cached record references and download authorized Anna records.
 
 The member key is read from the per-user environment or config directory. It is
 never bundled with the Skill, accepted as a command-line argument, or printed.
 Temporary download URLs are never printed.
+
+Anna's Archive does not expose a stable general-search JSON API. BookBridge
+therefore accepts a user-supplied official record URL or MD5, remembers that
+non-secret mapping locally, and never scrapes the protected HTML search page.
 """
 
 from __future__ import annotations
 
 import argparse
-import codecs
 import hashlib
-import html
 import json
 import os
 from pathlib import Path
 import re
 import sys
 import time
-from typing import Any, BinaryIO
+from typing import Any
+import unicodedata
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin, urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
@@ -31,6 +34,8 @@ DEFAULT_BASE_URL = "https://tw.annas-archive.gl"
 ALLOWED_OFFICIAL_HOSTS = frozenset({"annas-archive.gl", "tw.annas-archive.gl"})
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 USER_API_KEY_FILE = Path.home() / ".config" / "annas-archive" / "api_key"
+DEFAULT_RECORD_CACHE_FILE = Path.home() / ".config" / "bookbridge" / "records.json"
+RECORD_CACHE_ENV = "BOOKBRIDGE_RECORD_CACHE"
 API_KEY_ENV = "ANNAS_ARCHIVE_API_KEY"
 PACKAGED_ENV_FILE = SKILL_ROOT / "config" / ".env"
 DEFAULT_BOOKS_DIR = library_paths.BOOKS_DIR
@@ -39,21 +44,12 @@ USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
 MAX_API_RESPONSE_BYTES = 1_048_576
-DEFAULT_MAX_SEARCH_BYTES = 8 * 1024 * 1024
-SEARCH_READ_CHUNK_BYTES = 64 * 1024
-MAX_SEARCH_BLOCK_CHARS = 2 * 1024 * 1024
 DEFAULT_MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024
 ALLOWED_FORMATS = frozenset(
     {"epub", "pdf", "mobi", "azw", "azw3", "docx", "txt", "fb2", "rtf", "djvu"}
 )
+REQUESTED_FORMATS = ALLOWED_FORMATS | {"auto"}
 RIGHTS_BASES = ("public-domain", "open-license", "user-authorization")
-CONTENT_TYPES = ("book_any", "book_fiction", "book_nonfiction", "journal")
-SEARCH_RESULT_START = re.compile(
-    r'<div\s+class="flex\s+pt-3\s+pb-3\s+border-b\s+last:border-b-0\s+border-gray-100">'
-)
-SEARCH_RESULT_MARKER = (
-    '<div class="flex  pt-3 pb-3 border-b last:border-b-0 border-gray-100">'
-)
 
 
 class ClientError(RuntimeError):
@@ -119,6 +115,125 @@ def normalize_official_base_url(raw: str) -> str:
     if parsed.path not in ("", "/"):
         raise ClientError("Base URL must not include a path")
     return f"https://{parsed.hostname}"
+
+
+def record_reference_to_md5(value: str) -> str:
+    reference = value.strip()
+    if re.fullmatch(r"[0-9a-fA-F]{32}", reference):
+        return validate_md5(reference)
+
+    parsed = urlsplit(reference)
+    if parsed.scheme.lower() != "https" or parsed.hostname not in ALLOWED_OFFICIAL_HOSTS:
+        raise ClientError(
+            "Record reference must be an MD5 or an official HTTPS Anna's Archive /md5/ URL"
+        )
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ClientError("Record URL must not include credentials, query parameters, or fragments")
+    match = re.fullmatch(r"/md5/([0-9a-fA-F]{32})/?", parsed.path)
+    if not match:
+        raise ClientError("Record URL path must be /md5/<32-character MD5>")
+    return validate_md5(match.group(1))
+
+
+def record_cache_path() -> Path:
+    override = os.environ.get(RECORD_CACHE_ENV, "").strip()
+    return Path(override).expanduser() if override else DEFAULT_RECORD_CACHE_FILE
+
+
+def normalize_lookup_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    return "".join(character for character in normalized if character.isalnum())
+
+
+def load_record_cache(path: Path | None = None) -> list[dict[str, Any]]:
+    cache_path = record_cache_path() if path is None else path
+    try:
+        raw = cache_path.read_bytes()
+    except FileNotFoundError:
+        return []
+    except OSError:
+        raise ClientError("The local BookBridge record cache is unreadable") from None
+    if len(raw) > 2 * 1024 * 1024:
+        raise ClientError("The local BookBridge record cache is unexpectedly large")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise ClientError("The local BookBridge record cache is invalid") from None
+    if not isinstance(payload, dict) or not isinstance(payload.get("records"), list):
+        raise ClientError("The local BookBridge record cache has an unexpected structure")
+    return [record for record in payload["records"] if isinstance(record, dict)]
+
+
+def save_record_cache(records: list[dict[str, Any]], path: Path | None = None) -> Path:
+    cache_path = record_cache_path() if path is None else path
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        cache_path.parent.chmod(0o700)
+    except OSError:
+        pass
+    temp_path = cache_path.with_name(f".{cache_path.name}.tmp")
+    payload = json.dumps(
+        {"version": 1, "records": records}, ensure_ascii=False, indent=2, sort_keys=True
+    ) + "\n"
+    try:
+        temp_path.write_text(payload, encoding="utf-8")
+        temp_path.chmod(0o600)
+        os.replace(temp_path, cache_path)
+    except OSError:
+        try:
+            temp_path.unlink()
+        except OSError:
+            pass
+        raise ClientError("Could not update the local BookBridge record cache") from None
+    return cache_path
+
+
+def remember_record(record: dict[str, Any], path: Path | None = None) -> Path:
+    if not normalize_lookup_text(str(record.get("title") or "")):
+        raise ClientError("A title is required before remembering an Anna record")
+    md5 = validate_md5(str(record.get("md5") or ""))
+    records = load_record_cache(path)
+    normalized = {
+        "title": str(record.get("title") or "").strip(),
+        "authors": str(record.get("authors") or "").strip(),
+        "publisher": str(record.get("publisher") or "").strip(),
+        "year": str(record.get("year") or "").strip(),
+        "language": str(record.get("language") or "").strip(),
+        "format": str(record.get("format") or "auto").strip().lower(),
+        "md5": md5,
+        "record_url": str(record.get("record_url") or "").strip(),
+        "saved_at": int(time.time()),
+    }
+    updated = False
+    for index, existing in enumerate(records):
+        if str(existing.get("md5") or "").lower() == md5:
+            records[index] = normalized
+            updated = True
+            break
+    if not updated:
+        records.append(normalized)
+    return save_record_cache(records, path)
+
+
+def find_cached_records(
+    title: str, *, authors: str = "", file_format: str = ""
+) -> list[dict[str, Any]]:
+    title_key = normalize_lookup_text(title)
+    if not title_key:
+        raise ClientError("A title is required for local record lookup")
+    author_key = normalize_lookup_text(authors)
+    requested_format = file_format.strip().lower().lstrip(".")
+    matches: list[dict[str, Any]] = []
+    for record in load_record_cache():
+        if normalize_lookup_text(str(record.get("title") or "")) != title_key:
+            continue
+        if author_key and normalize_lookup_text(str(record.get("authors") or "")) != author_key:
+            continue
+        cached_format = str(record.get("format") or "auto").lower()
+        if requested_format and requested_format != "auto" and cached_format != requested_format:
+            continue
+        matches.append(record)
+    return matches
 
 
 def read_packaged_env_key(path: Path | None = None) -> str:
@@ -200,259 +315,47 @@ def open_request(
         raise ClientError(f"Network request failed: {reason}") from None
 
 
-def strip_markup(value: str) -> str:
-    value = re.sub(r"<[^>]+>", " ", value)
-    value = html.unescape(value)
-    return re.sub(r"\s+", " ", value).strip()
-
-
-def extract_link_text(block: str, icon_name: str) -> str:
-    pattern = re.compile(
-        rf'<a\s+href="/search\?q=[^"]*"[^>]*>'
-        rf'.*?<span\s+class="[^"]*{re.escape(icon_name)}[^"]*"[^>]*></span>'
-        rf'(.*?)</a>',
-        re.S,
-    )
-    match = pattern.search(block)
-    return strip_markup(match.group(1)) if match else ""
-
-
-def parse_search_results(
-    html_text: str,
-    *,
-    base_url: str,
-    language: str | None = None,
-    file_format: str | None = None,
-    limit: int = 20,
-) -> list[dict[str, Any]]:
-    blocks = SEARCH_RESULT_START.split(html_text)[1:]
-    results: list[dict[str, Any]] = []
-    seen: set[str] = set()
-
-    for block in blocks:
-        cover = re.search(
-            r'<a\s+href="/md5/([0-9a-fA-F]{32})"\s+class="custom-a block [^"]+">',
-            block,
-        )
-        if not cover:
-            continue
-        md5 = cover.group(1).lower()
-        if md5 in seen:
-            continue
-
-        title_match = re.search(
-            rf'<a\s+href="/md5/{md5}"\s+class="[^"]*js-vim-focus[^"]*"[^>]*>(.*?)</a>',
-            block,
-            re.S | re.I,
-        )
-        if not title_match:
-            continue
-        title = strip_markup(title_match.group(1))
-        authors = extract_link_text(block, "icon-[mdi--user-edit]")
-        publisher = extract_link_text(block, "icon-[mdi--company]")
-
-        metadata_match = re.search(
-            r'<div\s+class="text-gray-800[^"]*"[^>]*>([^<]*)', block, re.S
-        )
-        metadata = strip_markup(metadata_match.group(1)) if metadata_match else ""
-        lang_match = re.search(r"([^·]+?)\s*\[([a-zA-Z-]+)\]", metadata)
-        format_match = re.search(
-            r"\b(EPUB|PDF|MOBI|AZW3|AZW|DJVU|CBZ|CBR|FB2|DOCX?|TXT|RTF|ZIP)\b",
-            metadata,
-            re.I,
-        )
-        size_match = re.search(r"\b\d+(?:\.\d+)?\s*(?:KB|MB|GB|TB)\b", metadata, re.I)
-        year_match = re.search(r"(?:^|·)\s*((?:18|19|20)\d{2})\s*(?:·|$)", metadata)
-
-        language_name = lang_match.group(1).strip(" ✅") if lang_match else ""
-        language_code = lang_match.group(2).lower() if lang_match else ""
-        detected_format = format_match.group(1).lower() if format_match else ""
-        if language and language.lower() not in {language_name.lower(), language_code}:
-            continue
-        if file_format and file_format.lower() != detected_format:
-            continue
-
-        results.append(
-            {
-                "title": title,
-                "authors": authors,
-                "publisher": publisher,
-                "year": year_match.group(1) if year_match else "",
-                "language": language_name,
-                "language_code": language_code,
-                "format": detected_format,
-                "size": size_match.group(0).replace(" ", "") if size_match else "",
-                "md5": md5,
-                "record_url": urljoin(base_url, f"/md5/{md5}"),
-            }
-        )
-        seen.add(md5)
-        if len(results) >= limit:
-            break
-
-    return results
-
-
-def parse_streamed_search_response(
-    response,
-    *,
-    base_url: str,
-    language: str | None,
-    file_format: str | None,
-    limit: int,
-    max_bytes: int,
-    deadline: float | None = None,
-) -> list[dict[str, Any]]:
-    """Parse result blocks incrementally without retaining the full HTML page."""
-    decoder = codecs.getincrementaldecoder("utf-8")("replace")
-    buffer = ""
-    started = False
-    eof = False
-    bytes_read = 0
-    results: list[dict[str, Any]] = []
-    seen: set[str] = set()
-
-    def consume(block: str) -> None:
-        if not block or len(results) >= limit:
-            return
-        parsed = parse_search_results(
-            SEARCH_RESULT_MARKER + block,
-            base_url=base_url,
-            language=language,
-            file_format=file_format,
-            limit=1,
-        )
-        if parsed and parsed[0]["md5"] not in seen:
-            seen.add(parsed[0]["md5"])
-            results.append(parsed[0])
-
-    while len(results) < limit:
-        if deadline is not None and time.monotonic() >= deadline:
-            raise ClientError("Search exceeded the configured overall safety deadline")
-        try:
-            raw = response.read(SEARCH_READ_CHUNK_BYTES)
-        except (OSError, TimeoutError):
-            raise ClientError("Search response read timed out or was interrupted") from None
-        if raw:
-            bytes_read += len(raw)
-            if bytes_read > max_bytes:
-                raise ClientError(
-                    "Search response exceeded the low-memory safety limit; refine the query"
-                )
-            buffer += decoder.decode(raw)
-        else:
-            buffer += decoder.decode(b"", final=True)
-            eof = True
-
-        while True:
-            marker = SEARCH_RESULT_START.search(buffer)
-            if not started:
-                if marker is None:
-                    # The result list is near the beginning of the page. Keep
-                    # only enough tail to recognize a marker split across reads.
-                    if len(buffer) > 4096:
-                        buffer = buffer[-4096:]
-                    break
-                started = True
-                buffer = buffer[marker.end() :]
-                continue
-            if marker is None:
-                if len(buffer) > MAX_SEARCH_BLOCK_CHARS:
-                    raise ClientError("A search result block exceeded the memory safety limit")
-                break
-            consume(buffer[: marker.start()])
-            buffer = buffer[marker.end() :]
-            if len(results) >= limit:
-                break
-
-        if eof:
-            if started and len(results) < limit:
-                consume(buffer)
-            break
-
-    return results
-
-
-def fetch_search_results(
-    query: str,
-    content: str,
-    base_url: str,
-    timeout: float,
-    *,
-    language: str | None,
-    file_format: str | None,
-    limit: int,
-    max_bytes: int,
-    retries: int,
-    overall_timeout: float = 90.0,
-) -> tuple[list[dict[str, Any]], str]:
-    params = urlencode({"q": query, "content": content})
-    url = f"{base_url}/search?{params}"
-    last_error: ClientError | None = None
-    deadline = time.monotonic() + overall_timeout
-    for attempt in range(1, retries + 1):
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise ClientError("Search exceeded the configured overall safety deadline")
-        request = Request(url, headers={"User-Agent": USER_AGENT, "Accept": "text/html"})
-        try:
-            response = open_request(
-                request,
-                timeout=min(timeout, remaining),
-                allowed_redirect_hosts=ALLOWED_OFFICIAL_HOSTS,
-            )
-            with response:
-                results = parse_streamed_search_response(
-                    response,
-                    base_url=base_url,
-                    language=language,
-                    file_format=file_format,
-                    limit=limit,
-                    max_bytes=max_bytes,
-                    deadline=deadline,
-                )
-            return results, url
-        except ClientError as exc:
-            last_error = exc
-            if attempt >= retries or "safety limit" in str(exc).lower():
-                raise
-            delay = min(2 ** (attempt - 1), 4, max(0.0, deadline - time.monotonic()))
-            if delay:
-                time.sleep(delay)
-    raise last_error or ClientError("Search failed")
-
-
-def command_search(args: argparse.Namespace) -> dict[str, Any]:
+def command_record(args: argparse.Namespace) -> dict[str, Any]:
     base_url = normalize_official_base_url(args.base_url)
-    if args.html_file:
-        html_text = Path(args.html_file).read_text(encoding="utf-8")
-        source_url = "local-fixture"
-        results = parse_search_results(
-            html_text,
-            base_url=base_url,
-            language=args.language,
-            file_format=args.format,
-            limit=args.limit,
-        )
-    else:
-        results, source_url = fetch_search_results(
-            args.query,
-            args.content,
-            base_url,
-            args.timeout,
-            language=args.language,
-            file_format=args.format,
-            limit=args.limit,
-            max_bytes=args.max_search_bytes,
-            retries=args.retries,
-            overall_timeout=args.overall_timeout,
-        )
-    return {
+    md5 = record_reference_to_md5(args.record)
+    result = {
         "status": "ok",
-        "query": args.query,
-        "source_url": source_url,
-        "count": len(results),
-        "results": results,
+        "title": args.title.strip(),
+        "authors": args.authors.strip(),
+        "publisher": args.publisher.strip(),
+        "year": args.year.strip(),
+        "language": args.language.strip(),
+        "format": validate_requested_format(args.format),
+        "size": args.size.strip(),
+        "md5": md5,
+        "record_url": urljoin(base_url, f"/md5/{md5}"),
+    }
+    if args.remember:
+        remember_record(result)
+        result["cached"] = True
+    else:
+        result["cached"] = False
+    return result
+
+
+def command_lookup(args: argparse.Namespace) -> dict[str, Any]:
+    matches = find_cached_records(
+        args.title, authors=args.authors, file_format=args.format or ""
+    )
+    if not matches:
+        return {
+            "status": "record_required",
+            "manual_action_required": True,
+            "title": args.title.strip(),
+            "message": (
+                "No cached Anna record matches this title. Ask the user to provide the "
+                "selected official /md5/ record URL or its 32-character MD5."
+            ),
+        }
+    return {
+        "status": "found" if len(matches) == 1 else "ambiguous",
+        "manual_action_required": len(matches) != 1,
+        "records": matches,
     }
 
 
@@ -467,6 +370,13 @@ def validate_format(value: str) -> str:
     normalized = value.strip().lower().lstrip(".")
     if normalized not in ALLOWED_FORMATS:
         raise ClientError(f"Unsupported file format: {normalized or '[empty]'}")
+    return normalized
+
+
+def validate_requested_format(value: str) -> str:
+    normalized = value.strip().lower().lstrip(".")
+    if normalized not in REQUESTED_FORMATS:
+        raise ClientError(f"Unsupported requested format: {normalized or '[empty]'}")
     return normalized
 
 
@@ -534,6 +444,42 @@ def safe_filename(
     # enforce the traditional MAX_PATH boundary.
     stem = stem[:120].strip(" .")
     return f"{stem}.{file_format}"
+
+
+def detect_downloaded_format(path: Path, content_type: str = "") -> str:
+    with path.open("rb") as handle:
+        head = handle.read(512)
+    lowered = head.lstrip().lower()
+    if content_type.lower().startswith("text/html") or b"<html" in lowered[:200]:
+        raise ClientError("Downloaded content is an HTML page, not a book file")
+    if head.startswith(b"%PDF-"):
+        return "pdf"
+    if head.startswith(b"AT&TFORM"):
+        return "djvu"
+    if head.lstrip().startswith(b"{\\rtf"):
+        return "rtf"
+    palm_signature = head[60:68] if len(head) >= 68 else b""
+    if palm_signature in {b"BOOKMOBI", b"TEXtREAd"}:
+        return "mobi"
+    if zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path) as archive:
+            names = {member.filename for member in archive.infolist()}
+        if "META-INF/container.xml" in names:
+            return "epub"
+        if "[Content_Types].xml" in names:
+            return "docx"
+        raise ClientError("Downloaded ZIP container is not a supported EPUB or DOCX file")
+    if b"<FictionBook" in head or b"<fictionbook" in lowered:
+        return "fb2"
+    try:
+        head.decode("utf-8")
+        return "txt"
+    except UnicodeDecodeError:
+        try:
+            head.decode("gb18030")
+            return "txt"
+        except UnicodeDecodeError:
+            raise ClientError("Could not determine a supported book format") from None
 
 
 def validate_downloaded_file(path: Path, file_format: str, content_type: str) -> None:
@@ -701,13 +647,18 @@ def stream_download(
             raise ClientError(
                 f"MD5 verification failed: expected {expected_md5}, got {actual_md5}"
             )
-        validate_downloaded_file(temp_path, file_format, content_type)
+        resolved_format = (
+            detect_downloaded_format(temp_path, content_type)
+            if file_format == "auto"
+            else file_format
+        )
+        validate_downloaded_file(temp_path, resolved_format, content_type)
         final_path = place_without_overwrite(
             temp_path,
             output_dir,
             safe_filename(
                 title,
-                file_format,
+                resolved_format,
                 authors=authors,
                 year=year,
                 md5=expected_md5,
@@ -725,6 +676,7 @@ def stream_download(
         "bytes": bytes_written,
         "md5": actual_md5,
         "sha256": sha256_hash.hexdigest(),
+        "format": resolved_format,
         "content_type": content_type,
         "elapsed_seconds": round(elapsed, 3),
         "average_mib_per_second": round(bytes_written / 1024 / 1024 / elapsed, 3),
@@ -734,8 +686,8 @@ def stream_download(
 def command_download(args: argparse.Namespace) -> dict[str, Any]:
     if not args.confirm_quota:
         raise ClientError("Download requires --confirm-quota after user confirmation")
-    md5 = validate_md5(args.md5)
-    file_format = validate_format(args.format)
+    md5 = record_reference_to_md5(args.record or args.md5)
+    file_format = validate_requested_format(args.format)
     base_url = normalize_official_base_url(args.base_url)
     output_dir = (
         Path(args.output_dir).expanduser().resolve()
@@ -744,20 +696,41 @@ def command_download(args: argparse.Namespace) -> dict[str, Any]:
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     identity = f"[{md5[:8]}]"
-    for candidate in output_dir.glob(f"*.{file_format}"):
+    candidates = output_dir.glob("*") if file_format == "auto" else output_dir.glob(f"*.{file_format}")
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
         if identity not in candidate.name:
             continue
         if hash_file(candidate, "md5") == md5:
-            return {
+            existing_result = {
                 "status": "existing",
                 "path": str(candidate.resolve()),
                 "bytes": candidate.stat().st_size,
                 "md5": md5,
                 "sha256": hash_file(candidate, "sha256"),
+                "format": candidate.suffix.lower().lstrip("."),
                 "rights_basis": args.rights_basis,
                 "attempts": 0,
                 "api_quota_info_available": False,
             }
+            if args.remember:
+                remember_record(
+                    {
+                        "title": args.title,
+                        "authors": args.authors,
+                        "publisher": "",
+                        "year": args.year,
+                        "language": "",
+                        "format": existing_result["format"],
+                        "md5": md5,
+                        "record_url": urljoin(base_url, f"/md5/{md5}"),
+                    }
+                )
+                existing_result["cached"] = True
+            else:
+                existing_result["cached"] = False
+            return existing_result
     secret = load_secret_key()
 
     last_error: ClientError | None = None
@@ -798,33 +771,60 @@ def command_download(args: argparse.Namespace) -> dict[str, Any]:
         raise last_error or ClientError("Download failed")
     result["rights_basis"] = args.rights_basis
     result["api_quota_info_available"] = "account_fast_download_info" in descriptor
+    if args.remember:
+        remember_record(
+            {
+                "title": args.title,
+                "authors": args.authors,
+                "publisher": "",
+                "year": args.year,
+                "language": "",
+                "format": result.get("format") or file_format,
+                "md5": md5,
+                "record_url": urljoin(base_url, f"/md5/{md5}"),
+            }
+        )
+        result["cached"] = True
+    else:
+        result["cached"] = False
     return result
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Search and safely download explicitly authorized Anna's Archive records"
+        description="Resolve cached records and safely download authorized Anna MD5 records"
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    search = subparsers.add_parser("search", help="Search the Full database web index")
-    search.add_argument("--query", required=True)
-    search.add_argument("--content", choices=CONTENT_TYPES, default="book_any")
-    search.add_argument("--language", help="Language name or code, for example Chinese or zh")
-    search.add_argument("--format", choices=sorted(ALLOWED_FORMATS))
-    search.add_argument("--limit", type=int, default=20)
-    search.add_argument("--base-url", default=DEFAULT_BASE_URL)
-    search.add_argument("--timeout", type=float, default=45.0)
-    search.add_argument("--overall-timeout", type=float, default=90.0)
-    search.add_argument("--max-search-bytes", type=int, default=DEFAULT_MAX_SEARCH_BYTES)
-    search.add_argument("--retries", type=int, default=2)
-    search.add_argument("--html-file", help=argparse.SUPPRESS)
-    search.set_defaults(handler=command_search)
+    lookup = subparsers.add_parser(
+        "lookup", help="Look up a previously remembered record by exact normalized title"
+    )
+    lookup.add_argument("--title", required=True)
+    lookup.add_argument("--authors", default="")
+    lookup.add_argument("--format", choices=sorted(REQUESTED_FORMATS))
+    lookup.set_defaults(handler=command_lookup)
+
+    record = subparsers.add_parser(
+        "record", help="Normalize and optionally remember an official record URL or MD5"
+    )
+    record.add_argument("--record", required=True)
+    record.add_argument("--title", required=True)
+    record.add_argument("--format", default="auto", choices=sorted(REQUESTED_FORMATS))
+    record.add_argument("--authors", default="")
+    record.add_argument("--publisher", default="")
+    record.add_argument("--year", default="")
+    record.add_argument("--language", default="")
+    record.add_argument("--size", default="")
+    record.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    record.add_argument("--remember", action="store_true")
+    record.set_defaults(handler=command_record)
 
     download = subparsers.add_parser("download", help="Download one authorized MD5 record")
-    download.add_argument("--md5", required=True)
+    identity = download.add_mutually_exclusive_group(required=True)
+    identity.add_argument("--md5")
+    identity.add_argument("--record", help="Official HTTPS Anna's Archive /md5/ record URL")
     download.add_argument("--title", required=True)
-    download.add_argument("--format", required=True, choices=sorted(ALLOWED_FORMATS))
+    download.add_argument("--format", default="auto", choices=sorted(REQUESTED_FORMATS))
     download.add_argument("--authors", default="")
     download.add_argument("--year", default="")
     download.add_argument("--output-dir")
@@ -837,6 +837,7 @@ def build_parser() -> argparse.ArgumentParser:
     download.add_argument("--max-bytes", type=int, default=DEFAULT_MAX_DOWNLOAD_BYTES)
     download.add_argument("--retries", type=int, default=3)
     download.add_argument("--progress-interval", type=float, default=5.0)
+    download.add_argument("--remember", action="store_true")
     download.set_defaults(handler=command_download)
     return parser
 

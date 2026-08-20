@@ -1,0 +1,79 @@
+name: Publish BookBridge v2 Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/publish-bookbridge-v2.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: BookBridge-v2
+      RELEASE_ASSET: BookBridge-v2.zip
+      RELEASE_NOTES: |
+        ## BookBridge v2
+
+        BookBridge v2 starts from a user-supplied official Anna's Archive `/md5/` record URL or 32-character MD5. It remembers the non-secret title-to-record mapping locally, so later requests for the same title can reuse it, then automates authorized API download, validation, local storage, and IMA ingestion.
+
+        BookBridge no longer scrapes Anna's protected HTML search page and does not require Agent Browser. A different book, edition, or format needs its own record URL or MD5.
+
+        **Download `BookBridge-v2.zip` below.** It contains only the 12 files required by BookBridge. The asset contains no README, license, Git configuration, Anna's Archive key, IMA credential, local record cache, or downloaded book.
+
+        BookBridge v2 从用户提供的 Anna 官方 `/md5/` 记录地址或 32 位 MD5 开始。它会把非敏感的“书名到记录”映射保存在本机，以后同一本书可以复用，然后自动完成授权 API 下载、校验、本地保存和 IMA 入库。
+
+        BookBridge 不再抓取 Anna 受保护的 HTML 搜索页，也不需要 Agent Browser。不同书籍、版本或格式需要各自的记录地址或 MD5。
+
+        **请下载下方的 `BookBridge-v2.zip`。** 包内仅有 BookBridge 所需的 12 个文件；不包含 README、许可证、Git 配置、Anna's Archive Key、IMA 凭证、本机记录缓存或已下载书籍。
+    steps:
+      - name: Check out the Skill-only tag
+        uses: actions/checkout@v4
+        with:
+          ref: BookBridge-v2
+          path: skill-source
+
+      - name: Build and verify the Skill-only package
+        shell: bash
+        run: |
+          python3 skill-source/scripts/python_runner.py package_skill.py --output "$RELEASE_ASSET"
+          python3 - <<'PY'
+          from pathlib import Path
+          import zipfile
+
+          archive_path = Path("BookBridge-v2.zip")
+          expected = {
+              "bookbridge/SKILL.md",
+              "bookbridge/agents/openai.yaml",
+              "bookbridge/references/api.md",
+              "bookbridge/references/ima-mcp.md",
+              "bookbridge/scripts/annas_archive_client.py",
+              "bookbridge/scripts/configure_key.py",
+              "bookbridge/scripts/cos-upload.cjs",
+              "bookbridge/scripts/format_for_ima.py",
+              "bookbridge/scripts/library_paths.py",
+              "bookbridge/scripts/package_skill.py",
+              "bookbridge/scripts/python_runner.py",
+              "bookbridge/scripts/runtime_check.py",
+          }
+          with zipfile.ZipFile(archive_path) as archive:
+              actual = {name for name in archive.namelist() if not name.endswith("/")}
+          if actual != expected:
+              raise SystemExit(f"Unexpected package contents: {sorted(actual ^ expected)}")
+          PY
+
+      - name: Create or update the GitHub Release
+        shell: bash
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$RELEASE_ASSET#BookBridge v2 Skill-only package" --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$RELEASE_TAG" --title "BookBridge v2" --notes "$RELEASE_NOTES" --latest --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$RELEASE_TAG" "$RELEASE_ASSET#BookBridge v2 Skill-only package" --verify-tag --title "BookBridge v2" --notes "$RELEASE_NOTES" --latest --repo "$GITHUB_REPOSITORY"
+          fi

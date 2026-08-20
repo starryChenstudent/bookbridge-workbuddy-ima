@@ -17,6 +17,12 @@ import format_for_ima
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 ANNA_CONFIG_DIR = Path.home() / ".config" / "annas-archive"
 ANNA_API_KEY_FILE = ANNA_CONFIG_DIR / "api_key"
+BOOKBRIDGE_RECORD_CACHE = Path(
+    os.environ.get(
+        "BOOKBRIDGE_RECORD_CACHE",
+        str(Path.home() / ".config" / "bookbridge" / "records.json"),
+    )
+).expanduser()
 
 
 def node_runtime():
@@ -70,6 +76,14 @@ def main():
     ima_default_name = format_for_ima.get_default_knowledge_base_name()
     ima_default_configured = bool(ima_default_name)
 
+    cached_record_count = 0
+    if BOOKBRIDGE_RECORD_CACHE.exists():
+        try:
+            cache_payload = json.loads(BOOKBRIDGE_RECORD_CACHE.read_text(encoding="utf-8"))
+            cached_record_count = len(cache_payload.get("records", []))
+        except (OSError, UnicodeError, json.JSONDecodeError, AttributeError, TypeError):
+            actions.append("Repair or remove the invalid local BookBridge record cache")
+
     migration = {"legacy_found": False, "copied": 0, "skipped_existing": 0, "errors": []}
     try:
         library = library_paths.ensure_library(migrate_legacy=True)
@@ -96,6 +110,11 @@ def main():
         "node": node or "unavailable",
         "node_version": node_version or "unavailable",
         "node_supported": node_supported,
+        "agent_browser_required": False,
+        "record_discovery_mode": "user-supplied-record-or-local-cache",
+        "direct_record_inputs": ["official /md5/ URL", "32-character MD5"],
+        "record_cache_location": str(BOOKBRIDGE_RECORD_CACHE),
+        "cached_record_count": cached_record_count,
         "ebook_convert": ebook_convert or "optional-unavailable",
         "anna_credential_configured": anna_credential_configured,
         "anna_credential_source": anna_state["source"],
